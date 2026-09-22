@@ -60,6 +60,45 @@ function textIncludes(haystack, needle) {
   return nHay.includes(nNeedle) || nHay.includes(stripAl(nNeedle));
 }
 
+// Every searchable text field on a procedure, labeled for the "matched in"
+// hint shown when a hit isn't in the name/code/group.
+function procedureFields(p) {
+  return {
+    الاسم: p.name,
+    المجموعة: p.group,
+    الرمز: p.code,
+    المرجع: p.ref,
+    المالك: p.owner,
+    الهدف: p.objective,
+    النطاق: p.scope,
+    'الضوابط والسياسات': (p.policies || []).join(' | '),
+    المدخلات: (p.inputs || []).join(' | '),
+    المخرجات: (p.outputs || []).join(' | '),
+    النماذج: (p.forms || []).join(' | '),
+    'مؤشرات الأداء': (p.kpis || [])
+      .map((k) => `${k.name || ''} ${k.formula || ''}`)
+      .join(' | '),
+    الأنظمة: (p.systems || [])
+      .map((s) => `${s.system || ''} ${s.description || ''}`)
+      .join(' | '),
+    'الإجراءات المرتبطة': [
+      ...(p.related?.previous || []),
+      ...(p.related?.implicit || []),
+      ...(p.related?.next || []),
+    ].join(' | '),
+    'خطوات التنفيذ': (p.steps || [])
+      .map((s) => `${s.heading || ''} ${(s.bullets || []).join(' ')} ${s.responsible || ''}`)
+      .join(' | '),
+  };
+}
+
+function matchProcedureField(p, q) {
+  for (const [label, text] of Object.entries(procedureFields(p))) {
+    if (text && textIncludes(text, q)) return label;
+  }
+  return null;
+}
+
 function findOrgUnit(units, role) {
   const nRole = normalizeArabic(role);
   const exact = units.find((u) => normalizeArabic(u.title) === nRole);
@@ -91,12 +130,14 @@ function createServer() {
     {
       title: 'بحث في الإجراءات',
       description:
-        'يبحث في دليل إجراءات العمل بمدارس التعليم العام عن إجراء بالاسم أو الرمز أو المجموعة، مع إمكانية التصفية حسب الدور الوظيفي المسؤول أو المشارك.',
+        'يبحث في كل محتوى دليل إجراءات العمل بمدارس التعليم العام لإجراء معيّن: الاسم والرمز والمجموعة والهدف والنطاق، وكذلك الضوابط والسياسات، المدخلات، المخرجات، النماذج، مؤشرات الأداء، الأنظمة، الإجراءات المرتبطة، وخطوات التنفيذ. مع إمكانية التصفية حسب الدور الوظيفي المسؤول أو المشارك.',
       inputSchema: {
         query: z
           .string()
           .optional()
-          .describe('نص للبحث في اسم الإجراء أو رمزه أو مرجعه أو مجموعته (اختياري عند تمرير role)'),
+          .describe(
+            'نص للبحث في أي جزء من الإجراء: الاسم، الرمز، الهدف، الضوابط والسياسات، المدخلات، المخرجات، النماذج، مؤشرات الأداء، الأنظمة، أو خطوات التنفيذ (اختياري عند تمرير role)'
+          ),
         role: z
           .string()
           .optional()
@@ -130,28 +171,26 @@ function createServer() {
         results = results.filter((p) => codes.has(p.code));
       }
 
+      let matches = results.map((p) => ({ p, matchedIn: null }));
       if (query && query.trim()) {
         const q = query.trim();
-        results = results.filter(
-          (p) =>
-            p.name.includes(q) ||
-            p.code.includes(q) ||
-            (p.ref || '').includes(q) ||
-            (p.group || '').includes(q)
-        );
+        matches = matches
+          .map(({ p }) => ({ p, matchedIn: matchProcedureField(p, q) }))
+          .filter((x) => x.matchedIn);
       }
 
-      results = results.slice(0, limit || 10);
+      matches = matches.slice(0, limit || 10);
 
-      if (!results.length) {
+      if (!matches.length) {
         return { content: [{ type: 'text', text: 'لا توجد نتائج مطابقة.' }] };
       }
 
-      const text = results
-        .map(
-          (p) =>
-            `• [${p.code}] ${p.name} — ${p.group} (المالك: ${p.owner}, ص ${p.page_start}-${p.page_end})`
-        )
+      const text = matches
+        .map(({ p, matchedIn }) => {
+          const tag =
+            matchedIn && matchedIn !== 'الاسم' ? ` [تطابق في: ${matchedIn}]` : '';
+          return `• [${p.code}] ${p.name} — ${p.group} (المالك: ${p.owner}, ص ${p.page_start}-${p.page_end})${tag}`;
+        })
         .join('\n');
       return { content: [{ type: 'text', text }] };
     }
@@ -162,7 +201,7 @@ function createServer() {
     {
       title: 'تفاصيل إجراء',
       description:
-        'يعرض التفاصيل الكاملة لإجراء معيّن من دليل إجراءات العمل بمدارس التعليم العام باستخدام رمزه (مثل 1.1.1)، بما في ذلك الهدف والمدخلات والمخرجات والنماذج وخطوات التنفيذ.',
+        'يعرض التفاصيل الكاملة لإجراء معيّن من دليل إجراءات العمل بمدارس التعليم العام باستخدام رمزه (مثل 1.1.1)، بما في ذلك الهدف والنطاق والضوابط والسياسات والمدخلات والمخرجات والنماذج والأنظمة ومؤشرات الأداء والإجراءات المرتبطة وخطوات التنفيذ.',
       inputSchema: {
         code: z.string().describe('رمز الإجراء، مثل 1.1.1'),
       },
@@ -184,12 +223,35 @@ function createServer() {
       lines.push(`المالك: ${p.owner}`);
       if (p.objective) lines.push(`\nالهدف: ${p.objective}`);
       if (p.scope) lines.push(`النطاق: ${p.scope}`);
+      if (p.issue_date) lines.push(`تاريخ الإصدار: ${p.issue_date}`);
+      if (p.policies?.length)
+        lines.push(`\nالضوابط والسياسات:\n${p.policies.map((x) => `- ${x}`).join('\n')}`);
       if (p.inputs?.length)
         lines.push(`\nالمدخلات:\n${p.inputs.map((x) => `- ${x}`).join('\n')}`);
       if (p.outputs?.length)
         lines.push(`\nالمخرجات:\n${p.outputs.map((x) => `- ${x}`).join('\n')}`);
       if (p.forms?.length)
         lines.push(`\nالنماذج المستخدمة:\n${p.forms.map((x) => `- ${x}`).join('\n')}`);
+      if (p.systems?.length)
+        lines.push(
+          `\nالأنظمة المستخدمة:\n${p.systems
+            .map((s) => `- ${s.system}${s.description ? `: ${s.description}` : ''}`)
+            .join('\n')}`
+        );
+      if (p.kpis?.length)
+        lines.push(
+          `\nمؤشرات الأداء:\n${p.kpis
+            .map((k) => `- ${k.name}${k.unit ? ` (${k.unit})` : ''}${k.formula ? `: ${k.formula}` : ''}`)
+            .join('\n')}`
+        );
+      if (p.related && (p.related.previous?.length || p.related.implicit?.length || p.related.next?.length)) {
+        lines.push('\nالإجراءات المرتبطة:');
+        if (p.related.previous?.length)
+          lines.push(`  سابقة: ${p.related.previous.join('، ')}`);
+        if (p.related.implicit?.length)
+          lines.push(`  ضمنية: ${p.related.implicit.join('، ')}`);
+        if (p.related.next?.length) lines.push(`  لاحقة: ${p.related.next.join('، ')}`);
+      }
       if (p.steps?.length) {
         lines.push('\nخطوات التنفيذ:');
         for (const s of p.steps) {
@@ -223,12 +285,14 @@ function createServer() {
     {
       title: 'بحث في الوصف الوظيفي والمهام',
       description:
-        'يبحث في "الدليل التنظيمي لمدارس التعليم العام" (دليل الأهداف والمهام) عن مهام واختصاصات أي وظيفة مدرسية أو لجنة/فريق عمل، مع رقم الصفحة ورقم البند لكل مهمة. استخدمه لأسئلة مثل "ما مهام وكيل شؤون الطلاب؟" أو "من المسؤول عن متابعة الغياب؟".',
+        'يبحث في كل محتوى "الدليل التنظيمي لمدارس التعليم العام" (دليل الأهداف والمهام) لأي وظيفة مدرسية أو لجنة/فريق عمل: نصوص المهام، الهدف/الغاية، الارتباط التنظيمي، الحد الأدنى للمؤهلات والخبرات، الأعضاء، وضوابط التشكيل والاجتماعات (للجان). يعيد المهام المطابقة مع رقم الصفحة ورقم البند. استخدمه لأسئلة مثل "ما مهام وكيل شؤون الطلاب؟" أو "ما المؤهل المطلوب لمحضر المختبر؟".',
       inputSchema: {
         query: z
           .string()
           .optional()
-          .describe('نص للبحث في نصوص المهام أو الهدف (اختياري عند تمرير role)'),
+          .describe(
+            'نص للبحث في أي جزء من الوصف الوظيفي: المهام، الهدف، الارتباط التنظيمي، المؤهلات، الأعضاء، ضوابط التشكيل، أو الاجتماعات (اختياري عند تمرير role)'
+          ),
         role: z
           .string()
           .optional()
@@ -266,13 +330,19 @@ function createServer() {
       const q = (query || '').trim();
       const hits = [];
       for (const u of units) {
+        const unitMeta = [
+          u.title,
+          u.objective || u.goal || '',
+          ...(u.org_link || []),
+          ...(u.min_quals || []),
+          ...(u.formation_rules || []),
+          ...(u.meetings || []),
+          ...(u.members || []).map((m) => `${m.text} ${m.role || ''}`),
+        ].join(' | ');
+        const unitMatches = !q || textIncludes(unitMeta, q);
+
         for (const t of u.tasks || []) {
-          if (
-            !q ||
-            textIncludes(t.text, q) ||
-            textIncludes(u.title, q) ||
-            textIncludes(u.objective || u.goal || '', q)
-          ) {
+          if (unitMatches || textIncludes(t.text, q)) {
             hits.push({ unit: u, task: t });
           }
         }
