@@ -13,8 +13,41 @@ function loadData() {
   return dataCache;
 }
 
+let orgDataCache;
+function loadOrgData() {
+  if (!orgDataCache) {
+    const p = path.join(process.cwd(), 'data', 'org_manual.json');
+    orgDataCache = JSON.parse(readFileSync(p, 'utf-8'));
+  }
+  return orgDataCache;
+}
+
+// Job-description roles and committees share the same shape for our purposes
+// (a title, a page range, and a numbered task list) so they can be searched together.
+function orgUnits(orgData) {
+  const roles = Object.values(orgData.job_descriptions.roles).map((r) => ({
+    ...r,
+    kind: 'وظيفة',
+  }));
+  const committees = Object.values(orgData.committees).map((c) => ({
+    ...c,
+    kind: 'لجنة/فريق عمل',
+  }));
+  return [...roles, ...committees];
+}
+
+function findOrgUnit(units, role) {
+  const exact = units.find((u) => u.title === role);
+  if (exact) return exact;
+  const substr = units.find((u) => u.title.includes(role) || role.includes(u.title));
+  if (substr) return substr;
+  const tokens = role.split(/[\s/]+/).filter(Boolean);
+  return units.find((u) => tokens.every((t) => u.title.includes(t)));
+}
+
 function createServer() {
   const data = loadData();
+  const orgData = loadOrgData();
   const server = new McpServer(
     { name: 'procedures-guide', version: '1.0.0' },
     {
@@ -151,6 +184,149 @@ function createServer() {
         const idx = data.role_index[r];
         return `• ${r} — مالك: ${idx.owner_of.length}, مشارك: ${idx.contributes_to.length}`;
       });
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    }
+  );
+
+  server.registerTool(
+    'search_job_description',
+    {
+      title: 'بحث في الوصف الوظيفي والمهام',
+      description:
+        'يبحث في "الدليل التنظيمي لمدارس التعليم العام" (دليل الأهداف والمهام) عن مهام واختصاصات أي وظيفة مدرسية أو لجنة/فريق عمل، مع رقم الصفحة ورقم البند لكل مهمة. استخدمه لأسئلة مثل "ما مهام وكيل شؤون الطلاب؟" أو "من المسؤول عن متابعة الغياب؟".',
+      inputSchema: {
+        query: z
+          .string()
+          .optional()
+          .describe('نص للبحث في نصوص المهام أو الهدف (اختياري عند تمرير role)'),
+        role: z
+          .string()
+          .optional()
+          .describe(
+            'اسم وظيفة أو لجنة/فريق عمل لتصفية النتائج، يجب أن يطابق أحد الأسماء في list_org_units'
+          ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(50)
+          .optional()
+          .describe('أقصى عدد نتائج تُعاد (افتراضي 15)'),
+      },
+    },
+    async ({ query, role, limit }) => {
+      let units = orgUnits(orgData);
+
+      if (role) {
+        const match = findOrgUnit(units, role);
+        if (!match) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: `لا توجد وظيفة أو لجنة بهذا الاسم: "${role}". استخدم list_org_units لعرض الأسماء المتاحة.`,
+              },
+            ],
+          };
+        }
+        units = [match];
+      }
+
+      const q = (query || '').trim();
+      const hits = [];
+      for (const u of units) {
+        for (const t of u.tasks || []) {
+          if (
+            !q ||
+            t.text.includes(q) ||
+            u.title.includes(q) ||
+            (u.objective || u.goal || '').includes(q)
+          ) {
+            hits.push({ unit: u, task: t });
+          }
+        }
+      }
+
+      const sliced = hits.slice(0, limit || 15);
+      if (!sliced.length) {
+        return { content: [{ type: 'text', text: 'لا توجد نتائج مطابقة.' }] };
+      }
+
+      const text = sliced
+        .map(
+          ({ unit, task }) =>
+            `• ${task.text} (${unit.kind === 'لجنة/فريق عمل' ? 'مهام' : 'الوصف الوظيفي لـ'}${unit.title}، ص. ${unit.page_start}، البند رقم ${task.seq})`
+        )
+        .join('\n');
+      return { content: [{ type: 'text', text }] };
+    }
+  );
+
+  server.registerTool(
+    'get_job_description',
+    {
+      title: 'تفاصيل الوصف الوظيفي أو اللجنة',
+      description:
+        'يعرض التفاصيل الكاملة لوظيفة مدرسية أو لجنة/فريق عمل من "الدليل التنظيمي لمدارس التعليم العام": الهدف/الغاية، الارتباط التنظيمي أو الأعضاء، الحد الأدنى للمؤهلات (للوظائف)، وقائمة كل المهام مرقّمة مع الاستشهاد.',
+      inputSchema: {
+        role: z
+          .string()
+          .describe('اسم الوظيفة أو اللجنة/فريق العمل كما يظهر في list_org_units'),
+      },
+    },
+    async ({ role }) => {
+      const units = orgUnits(orgData);
+      const u = findOrgUnit(units, role);
+      if (!u) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: `لا توجد وظيفة أو لجنة بهذا الاسم: "${role}". استخدم list_org_units لعرض الأسماء المتاحة.`,
+            },
+          ],
+        };
+      }
+
+      const lines = [];
+      lines.push(`# ${u.title} (${u.kind})`);
+      lines.push(`الصفحات: ${u.page_start}-${u.page_end}`);
+      if (u.org_link?.length) lines.push(`\nالارتباط التنظيمي:\n${u.org_link.map((x) => `- ${x}`).join('\n')}`);
+      if (u.objective) lines.push(`\nالهدف الوظيفي: ${u.objective}`);
+      if (u.goal) lines.push(`\nالهدف/الغاية: ${u.goal}`);
+      if (u.members?.length)
+        lines.push(
+          `\nالأعضاء:\n${u.members.map((m) => `- ${m.text}${m.role ? ` (${m.role})` : ''}`).join('\n')}`
+        );
+      if (u.min_quals?.length)
+        lines.push(`\nالحد الأدنى للمؤهلات والخبرات:\n${u.min_quals.map((x) => `- ${x}`).join('\n')}`);
+      if (u.formation_rules?.length)
+        lines.push(`\nضوابط التشكيل:\n${u.formation_rules.map((x) => `- ${x}`).join('\n')}`);
+      if (u.meetings?.length)
+        lines.push(`\nالاجتماعات:\n${u.meetings.map((x) => `- ${x}`).join('\n')}`);
+      if (u.tasks?.length) {
+        lines.push(`\nالمهام (ص. ${u.page_start}-${u.page_end}):`);
+        for (const t of u.tasks) lines.push(`${t.seq}. ${t.text}`);
+      }
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    }
+  );
+
+  server.registerTool(
+    'list_org_units',
+    {
+      title: 'قائمة الوظائف واللجان',
+      description:
+        'يعرض كل الوظائف المدرسية واللجان/فرق العمل الواردة في الدليل التنظيمي، مع عدد المهام والصفحات لكل واحدة. استخدمه لمعرفة الاسم الدقيق قبل استدعاء get_job_description أو search_job_description بمعامل role.',
+      inputSchema: {},
+    },
+    async () => {
+      const units = orgUnits(orgData);
+      const lines = units.map(
+        (u) => `• ${u.title} (${u.kind}) — ${u.tasks?.length || 0} مهمة، ص. ${u.page_start}-${u.page_end}`
+      );
       return { content: [{ type: 'text', text: lines.join('\n') }] };
     }
   );
