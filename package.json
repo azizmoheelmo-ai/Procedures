@@ -1,0 +1,12 @@
+{
+  "name": "procedures-mcp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "extract-data": "node scripts/extract-data.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.23.8"
+  }
+}
