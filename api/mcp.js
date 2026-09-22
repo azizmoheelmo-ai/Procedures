@@ -254,7 +254,11 @@ function createServer() {
       }
       if (p.steps?.length) {
         lines.push('\nخطوات التنفيذ:');
-        for (const s of p.steps) {
+        // Source order is occasionally scrambled; printed_seq is reliable.
+        const orderedSteps = [...p.steps].sort(
+          (a, b) => parseInt(a.printed_seq, 10) - parseInt(b.printed_seq, 10)
+        );
+        for (const s of orderedSteps) {
           lines.push(`${s.printed_seq}. ${s.heading} (المسؤول: ${s.responsible || '-'})`);
           for (const b of s.bullets || []) lines.push(`   - ${b}`);
         }
