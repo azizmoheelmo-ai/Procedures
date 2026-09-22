@@ -36,13 +36,43 @@ function orgUnits(orgData) {
   return [...roles, ...committees];
 }
 
+// Normalizes Arabic text for matching: strips diacritics/tatweel, unifies
+// hamza/alef and ya/ta-marbuta variants. Word-level "ال" (the definite
+// article) is stripped separately in findOrgUnit/textIncludes, since titles
+// in the manual inconsistently include it (e.g. "محضر مختبر" vs a query for
+// "محضر المختبر").
+function normalizeArabic(s) {
+  return (s || '')
+    .replace(/[ً-ْٰـ]/g, '')
+    .replace(/[إأآا]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/ة/g, 'ه')
+    .trim();
+}
+
+function stripAl(word) {
+  return word.startsWith('ال') && word.length > 2 ? word.slice(2) : word;
+}
+
+function textIncludes(haystack, needle) {
+  const nHay = normalizeArabic(haystack);
+  const nNeedle = normalizeArabic(needle);
+  return nHay.includes(nNeedle) || nHay.includes(stripAl(nNeedle));
+}
+
 function findOrgUnit(units, role) {
-  const exact = units.find((u) => u.title === role);
+  const nRole = normalizeArabic(role);
+  const exact = units.find((u) => normalizeArabic(u.title) === nRole);
   if (exact) return exact;
-  const substr = units.find((u) => u.title.includes(role) || role.includes(u.title));
+  const substr = units.find(
+    (u) => textIncludes(u.title, role) || textIncludes(role, u.title)
+  );
   if (substr) return substr;
-  const tokens = role.split(/[\s/]+/).filter(Boolean);
-  return units.find((u) => tokens.every((t) => u.title.includes(t)));
+  const tokens = nRole.split(/[\s/]+/).filter(Boolean).map(stripAl);
+  return units.find((u) => {
+    const nTitle = normalizeArabic(u.title);
+    return tokens.every((t) => nTitle.includes(t) || nTitle.includes('ال' + t));
+  });
 }
 
 function createServer() {
@@ -239,9 +269,9 @@ function createServer() {
         for (const t of u.tasks || []) {
           if (
             !q ||
-            t.text.includes(q) ||
-            u.title.includes(q) ||
-            (u.objective || u.goal || '').includes(q)
+            textIncludes(t.text, q) ||
+            textIncludes(u.title, q) ||
+            textIncludes(u.objective || u.goal || '', q)
           ) {
             hits.push({ unit: u, task: t });
           }
