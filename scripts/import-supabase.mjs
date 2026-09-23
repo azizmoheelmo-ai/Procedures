@@ -76,6 +76,7 @@ function normalizeProcedure(p) {
     systems: p.systems ?? [],
     forms: p.forms ?? [],
     raci: p.raci ?? [],
+    related: p.related_procedures ?? p.related ?? {},
     steps: (p.steps ?? []).map((s, i) => ({
       seq: toInt(s.seq) ?? i + 1,
       printed_seq: s.printed_seq ?? null,
@@ -127,7 +128,27 @@ function loadSource(file) {
 
   groups.sort((a, b) => compareCodes(a.code, b.code));
   for (const g of groups) g.procedures.sort((a, b) => compareCodes(a.code, b.code));
+  resolveRelated(groups.flatMap((g) => g.procedures));
   return { meta, groups };
+}
+
+// Related procedures are listed by name ("إجراء ..."). Link the ones that are
+// in this guide to their reference code; the rest belong to other levels
+// (e.g. the education department) and keep ref_code null.
+const RELATIONS = ['previous', 'implicit', 'next'];
+const nameKey = (s) => clean(s).replace(/^إجراء\s*/, '').replace(/\s+/g, ' ');
+
+function resolveRelated(procedures) {
+  const refByName = new Map(procedures.map((p) => [nameKey(p.name), p.ref_code]));
+  for (const p of procedures) {
+    p.related = RELATIONS.flatMap((relation) =>
+      (p.related[relation] ?? []).map((name) => ({
+        relation,
+        name: clean(name),
+        ref_code: refByName.get(nameKey(name)) ?? null,
+      }))
+    );
+  }
 }
 
 // Brief: version_label is 1446-1447هـ; the date comes from the Gregorian part
@@ -166,6 +187,9 @@ function buildBlocks(proc, sectionId) {
     add('kpi', toInt(k.seq) ?? i + 1, k.name, { code: k.code, formula: k.formula, unit: k.unit })
   );
   proc.systems.forEach((s, i) => add('system', i + 1, s.system, { description: s.description }));
+  proc.related.forEach((r, i) =>
+    add('note', i + 1, r.name, { kind: 'related_procedure', relation: r.relation, ref_code: r.ref_code })
+  );
   return blocks;
 }
 
@@ -415,7 +439,16 @@ async function demo(sb, versionId) {
     select cb.block_type, left(cb.text_content, 60), get_citation(cb.id)
       from content_blocks cb
      where cb.search_vector @@ plainto_tsquery('simple', '${term}')
-     limit 5;`);
+     limit 5;
+
+    -- Related procedures of س-1-ا-1, linked to their section where in this guide
+    select cb.metadata->>'relation' as relation, cb.text_content, t.title
+      from content_blocks cb
+      join sections s on s.id = cb.section_id
+      left join sections t on t.guide_version_id = s.guide_version_id
+                          and t.code = cb.metadata->>'ref_code'
+     where s.code = 'س-1-ا-1' and cb.metadata->>'kind' = 'related_procedure'
+     order by cb.seq;`);
 }
 
 main().catch((err) => {
