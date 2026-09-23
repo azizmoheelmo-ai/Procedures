@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "extract-data": "node scripts/extract-data.mjs",
     "import-supabase": "node scripts/import-supabase.mjs",
-    "build-payloads": "node scripts/import-supabase.mjs --dry-run --out supabase/payloads"
+    "build-payloads": "node scripts/import-supabase.mjs --dry-run --out supabase/payloads",
+    "check-drift": "node scripts/check-drift.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
