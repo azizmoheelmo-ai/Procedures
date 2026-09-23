@@ -77,6 +77,7 @@ function normalizeProcedure(p) {
     forms: p.forms ?? [],
     raci: p.raci ?? [],
     related: p.related_procedures ?? p.related ?? {},
+    raw_text: p.raw_text ?? null,
     steps: (p.steps ?? []).map((s, i) => ({
       seq: toInt(s.seq) ?? i + 1,
       printed_seq: s.printed_seq ?? null,
@@ -190,6 +191,8 @@ function buildBlocks(proc, sectionId) {
   proc.related.forEach((r, i) =>
     add('note', i + 1, r.name, { kind: 'related_procedure', relation: r.relation, ref_code: r.ref_code })
   );
+  // Full extracted text of the procedure (only in procedures-db.json).
+  add('note', 0, proc.raw_text, { kind: 'raw_text', page_start: proc.page_start, page_end: proc.page_end });
   return blocks;
 }
 
@@ -421,6 +424,8 @@ async function demo(sb, versionId) {
       .select('id, block_type, text_content, sections!inner(code, title, guide_version_id)')
       .eq('sections.guide_version_id', versionId)
       .textSearch('search_vector', term, { config: 'simple', type: 'plain' })
+      // raw_text notes repeat the whole procedure; keep the sample to structured blocks.
+      .or('block_type.neq.note,metadata->>kind.neq.raw_text')
       .limit(3),
     'search content_blocks'
   );
@@ -439,6 +444,7 @@ async function demo(sb, versionId) {
     select cb.block_type, left(cb.text_content, 60), get_citation(cb.id)
       from content_blocks cb
      where cb.search_vector @@ plainto_tsquery('simple', '${term}')
+       and cb.metadata->>'kind' is distinct from 'raw_text'
      limit 5;
 
     -- Related procedures of س-1-ا-1, linked to their section where in this guide
