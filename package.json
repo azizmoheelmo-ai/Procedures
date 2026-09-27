@@ -5,12 +5,14 @@
   "scripts": {
     "import-supabase": "node scripts/import-supabase.mjs",
     "build-payloads": "node scripts/import-supabase.mjs --dry-run --out supabase/payloads",
-    "check-drift": "node scripts/check-drift.mjs"
+    "check-drift": "node scripts/check-drift.mjs",
+    "validate-guide": "node scripts/validate-guide.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@supabase/supabase-js": "^2.117.0",
     "dotenv": "^18.0.3",
+    "pdf-parse": "^2.4.5",
     "zod": "^3.23.8"
   }
 }
