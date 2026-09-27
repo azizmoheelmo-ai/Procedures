@@ -4,6 +4,31 @@ import { z } from 'zod';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
+// Optional: reaches the Supabase database (search_guides/list_guides), which
+// covers every guide in the hub — including ones added after this file was
+// last deployed. Falls back to a clear message when unset; the JSON-based
+// tools above never depend on this. Set SUPABASE_URL and SUPABASE_ANON_KEY
+// (the publishable/anon key — never the service-role key) as Vercel env vars.
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const supabaseConfigured = () => Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+const NOT_CONFIGURED_MSG =
+  'قاعدة بيانات الأدلة غير مفعّلة على هذا الموصّل بعد (SUPABASE_URL/SUPABASE_ANON_KEY). استعمل الأدوات الأخرى، أو أضف متغيرات البيئة في Vercel.';
+
+async function supabaseRequest(pathAndQuery, init = {}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${pathAndQuery}`, {
+    ...init,
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+      ...init.headers,
+    },
+  });
+  if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 300)}`);
+  return res.json();
+}
+
 let dataCache;
 function loadData() {
   if (!dataCache) {
@@ -432,6 +457,59 @@ function createServer() {
         (u) => `• ${u.title} (${u.kind}) — ${u.tasks?.length || 0} مهمة، ص. ${u.page_start}-${u.page_end}`
       );
       return { content: [{ type: 'text', text: lines.join('\n') }] };
+    }
+  );
+
+  server.registerTool(
+    'search_all_guides',
+    {
+      title: 'بحث موحّد في كل أدلة الوزارة',
+      description:
+        'يبحث في النسخة الحالية من كل الأدلة المخزَّنة في قاعدة بيانات المجمّع — وليس فقط دليلي الإجراءات والدليل التنظيمي المضمَّنين في هذا الموصّل — ويعيد كل نتيجة مع استشهادها الدقيق بالصفحة والبند. استخدمه لأي دليل أُضيف حديثاً (كاللوائح) ولم يُدرَج له أداة خاصة بعد.',
+      inputSchema: {
+        query: z.string().describe('نص البحث'),
+        guide: z.string().optional().describe('رمز دليل محدد للبحث فيه فقط (اختياري)، مثل procedures_manual أو org_manual'),
+        max_results: z.number().int().min(1).max(50).optional().describe('أقصى عدد نتائج (افتراضي 20)'),
+      },
+    },
+    async ({ query, guide, max_results }) => {
+      if (!supabaseConfigured()) return { content: [{ type: 'text', text: NOT_CONFIGURED_MSG }] };
+      try {
+        const rows = await supabaseRequest('rpc/search_guides', {
+          method: 'POST',
+          body: JSON.stringify({ q: query, guide: guide ?? null, max_results: max_results ?? 20 }),
+        });
+        if (!rows.length) return { content: [{ type: 'text', text: 'لا نتائج.' }] };
+        const lines = rows.map((r) => `• [${r.guide_code}/${r.block_type}] ${r.text_content}\n  ↳ ${r.citation}`);
+        return { content: [{ type: 'text', text: lines.join('\n\n') }] };
+      } catch (e) {
+        return { content: [{ type: 'text', text: `تعذّر البحث في قاعدة البيانات: ${e.message}` }] };
+      }
+    }
+  );
+
+  server.registerTool(
+    'list_all_guides',
+    {
+      title: 'قائمة كل الأدلة في قاعدة البيانات',
+      description:
+        'يعرض كل الأدلة المخزَّنة في قاعدة بيانات المجمّع مع رمزها ونوعها وإصدارها الحالي وعدد صفحاته، بما فيها أي دليل أُضيف بعد آخر نشر لهذا الموصّل.',
+      inputSchema: {},
+    },
+    async () => {
+      if (!supabaseConfigured()) return { content: [{ type: 'text', text: NOT_CONFIGURED_MSG }] };
+      try {
+        const rows = await supabaseRequest(
+          'guides?select=code,name_ar,short_name,guide_type,guide_versions(version_label,total_pages,is_current)&guide_versions.is_current=eq.true'
+        );
+        const lines = rows.map((g) => {
+          const v = g.guide_versions?.[0];
+          return `• ${g.short_name} (${g.code}، ${g.guide_type}) — إصدار ${v?.version_label ?? '؟'}، ${v?.total_pages ?? '؟'} صفحة`;
+        });
+        return { content: [{ type: 'text', text: lines.join('\n') }] };
+      } catch (e) {
+        return { content: [{ type: 'text', text: `تعذّر جلب قائمة الأدلة: ${e.message}` }] };
+      }
     }
   );
 
