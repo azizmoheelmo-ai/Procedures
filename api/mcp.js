@@ -480,7 +480,10 @@ function createServer() {
           body: JSON.stringify({ q: query, guide: guide ?? null, max_results: max_results ?? 20 }),
         });
         if (!rows.length) return { content: [{ type: 'text', text: 'لا نتائج.' }] };
-        const lines = rows.map((r) => `• [${r.guide_code}/${r.block_type}] ${r.text_content}\n  ↳ ${r.citation}`);
+        const lines = rows.map((r) => {
+          const heading = r.section_title ? `${r.section_code ?? ''} — ${r.section_title}`.trim() : r.section_code;
+          return `• [${r.guide_code}/${r.block_type}] ${heading}\n  «${r.text_content}»\n  ↳ ${r.citation}`;
+        });
         return { content: [{ type: 'text', text: lines.join('\n\n') }] };
       } catch (e) {
         return { content: [{ type: 'text', text: `تعذّر البحث في قاعدة البيانات: ${e.message}` }] };
