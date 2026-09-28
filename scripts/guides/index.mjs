@@ -12,4 +12,8 @@ import orgManual from './org-manual.mjs';
 import { genericGuide } from './generic.mjs';
 
 export { genericGuide };
-export const guides = [procedures, orgManual];
+export const guides = [
+  procedures,
+  orgManual,
+  genericGuide({ code: 'behavior_regs', source: 'data/behavior_regs.json' }),
+];
